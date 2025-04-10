@@ -33,8 +33,8 @@ Takeout = namedtuple("Takeout", ["photos_source", "albums", "special", "root_pat
 source_folder_regex = re.compile(r"^Photos from \d{4}$")
 untitled_folder_regex = re.compile(r"^Untitled(?:\(\d+\))?$")
 
-special_folders = ["Bin", "Archive"]
 album_folder_name = "ALBUMS"
+special_folders = ["Bin", "Archive", "Failed Videos", album_folder_name]
 # move all images that are not in the source folder to a special folder
 other_photo_folder_name = "OTHER_PHOTOS"
 metadata_file_name = "metadata.json"
@@ -138,6 +138,10 @@ def open_gphotos_root_path(gphotos_root_path: pathlib.Path) -> Takeout:
             print(f"Found non-source folder: {image_dir.name}")
 
         album = index_folder(image_dir, gphotos_root_path)
+        # do not keep empty folders
+        if not album.photo_files and not album.other_files:
+            print(f"Empty folder: {image_dir.name}. Skipping.")
+            continue
         albums[album.name] = album
 
     folder_special = {k: album for k, album in albums.items() if album.is_special}
@@ -390,6 +394,23 @@ def remove_untitled_albums(takeout: Takeout, task_ledger):
         del takeout.albums[album_name]
 
 
+def move_into_album_folder(
+    takeout: Takeout, task_ledger, album_folder_name: str = album_folder_name
+):
+    """
+    Move all albums into the ALBUMS folder.
+    """
+    album_folder = takeout.root_path / album_folder_name
+    album_folder = album_folder.relative_to(takeout.root_path)
+    task_ledger.append(("create_dir", album_folder))
+
+    for album in takeout.albums.values():
+        if not album.is_special:
+            task_ledger.append(
+                ("rename", pathlib.Path(album.name), album_folder / album.name)
+            )
+
+
 def optimize_takeout(takeout: Takeout, keep_untitled_albums: bool):
 
     task_ledger = []
@@ -404,14 +425,13 @@ def optimize_takeout(takeout: Takeout, keep_untitled_albums: bool):
     #
     replace_album_files_with_yaml_metadata(takeout, task_ledger)
 
-    # TODO: Move all album folders into ALBUMS folder.
+    # Move all album folders into ALBUMS folder.
+    move_into_album_folder(takeout, task_ledger)
 
     return task_ledger
 
 
-def execute_task_ledger(
-    gphotos_root_path: pathlib.Path, task_ledger, dry_run: bool = False
-):
+def execute_task_ledger(gphotos_root_path: pathlib.Path, task_ledger, dry_run: bool):
     """
     Execute the tasks in the task ledger.
     """
@@ -430,14 +450,20 @@ def execute_task_ledger(
         with open(path, "w") as f:
             f.write(content)
 
+    def create_dir(path: pathlib.Path):
+        path = gphotos_root_path / path
+        path.mkdir(parents=True, exist_ok=True)
+
     def rename(old_path: pathlib.Path, new_path: pathlib.Path):
         old_path = gphotos_root_path / old_path
         new_path = gphotos_root_path / new_path
+        # this also works for non-empty directories
         old_path.rename(new_path)
 
     actions = {
         "delete": delete,
         "create": create,
+        "create_dir": create_dir,
         "rename": rename,
     }
 
