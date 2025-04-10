@@ -20,6 +20,7 @@ from collections import defaultdict, namedtuple
 import pathlib
 import click
 import re
+from typing import Optional
 
 import ruamel.yaml
 
@@ -42,12 +43,17 @@ metadata_file_name = "metadata.json"
 class FileCluster:
     """Bundle the actual image file with meta data file(s)."""
 
-    def __init__(self, paths: list[pathlib.Path], gphotos_root_path: pathlib.Path):
+    def __init__(
+        self, paths: list[pathlib.Path], gphotos_root_path: Optional[pathlib.Path]
+    ):
         # first entry is the "base" file (e.g. photo.JPG)
         # use paths relative to the gphotos root path
-        self.paths = [
-            p.relative_to(gphotos_root_path) if p.is_file() else p for p in paths
-        ]
+        if gphotos_root_path is not None:
+            self.paths = [
+                p.relative_to(gphotos_root_path) if p.is_file() else p for p in paths
+            ]
+        else:
+            self.paths = paths
 
     def __repr__(self):
         return f"FileCluster({', '.join(p.name for p in self.paths)})"
@@ -62,7 +68,8 @@ class FileCluster:
             new_path = path.parent / new_name
             task_ledger.append(("rename", path, new_path))
             updated.append(new_path)
-        self.paths = updated
+
+        return FileCluster(paths=updated, gphotos_root_path=None)
 
 
 def cluster_files_entries(entries: list[pathlib.Path], gphotos_root_path: pathlib.Path):
@@ -214,6 +221,35 @@ def compare_two_files(
         return f1.read() == f2.read()
 
 
+def _rename_cluster(
+    photo_files: dict,
+    prefix_str,
+    duplicate_key,
+    updated_key,
+    task_ledger,
+    album_files,
+    source_files,
+):
+    """
+    Rename the cluster with the given prefix.
+    """
+    cluster: FileCluster = photo_files[duplicate_key]
+    renamed_cluster = cluster.prefix_rename(prefix_str, task_ledger)
+
+    # make sure that none of the renamed files exists globally in the source files or album files
+    if any(p.name in album_files for p in renamed_cluster.paths):
+        raise ValueError(
+            f"File {renamed_cluster.paths[0].name} already exists in album files."
+        )
+    if any(p.name in source_files for p in renamed_cluster.paths):
+        raise ValueError(
+            f"File {renamed_cluster.paths[0].name} already exists in source files."
+        )
+
+    photo_files[updated_key] = renamed_cluster
+    photo_files.pop(duplicate_key)
+
+
 def resolve_album_duplicate(
     takeout: Takeout, album_files, source_files, duplicate: str, task_ledger
 ) -> dict:
@@ -240,28 +276,38 @@ def resolve_album_duplicate(
     # find unmatched source files
     unmatched_source = set(source_files_to_match.keys()) - set(matches.keys())
 
+    rename_args = (task_ledger, album_files, source_files)
+
     for match_source, match_albums in matches.items():
         prefix_str = match_source.replace(" ", "_") + "__"
         updated_key = f"{prefix_str}{duplicate}"
-        takeout.photos_source[match_source].photo_files[duplicate].prefix_rename(
-            prefix_str, task_ledger
+        _rename_cluster(
+            takeout.photos_source[match_source].photo_files,
+            prefix_str,
+            duplicate,
+            updated_key,
+            *rename_args,
         )
-        takeout.photos_source[match_source].photo_files[updated_key] = (
-            takeout.photos_source[match_source].photo_files.pop(duplicate)
-        )
+
         for album in match_albums:
-            takeout.albums[album].photo_files[duplicate].prefix_rename(
-                prefix_str, task_ledger
+            _rename_cluster(
+                takeout.albums[album].photo_files,
+                prefix_str,
+                duplicate,
+                updated_key,
+                *rename_args,
             )
-            takeout.albums[album].photo_files[updated_key] = takeout.albums[
-                album
-            ].photo_files.pop(duplicate)
 
     for unmatch in unmatched_source:
         # rename the source file with a prefix
         prefix_str = unmatch.replace(" ", "_") + "__"
-        takeout.photos_source[unmatch].photo_files[duplicate].prefix_rename(
-            prefix_str, task_ledger
+        updated_key = f"{prefix_str}{duplicate}"
+        _rename_cluster(
+            takeout.photos_source[unmatch].photo_files,
+            prefix_str,
+            duplicate,
+            updated_key,
+            *rename_args,
         )
 
     # remove cluster from merged lists
