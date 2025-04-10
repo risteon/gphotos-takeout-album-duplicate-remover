@@ -1,19 +1,7 @@
 #!/bin/python
 """
-
-This script analyzes the contents of a Google Photos takeout folder.
-
-Folders:
-- Photos from YYYY: These folders contain the original photos and videos. Keep them as they are.
-- Other folders: These folders contain albums. Create a yaml file for each album, describing the contents of the album.
-
-- Shared folders, archive and bin might contain files that are not in the source folder.
-- Most photo files have a unique file name. But there is "metadata.json" in every album and some other uploaded files might share file names. Resolve the ambiguity by prefixing the album name to the file name.
-
-Steps:
-1. Read the contents of the specified folder.
-2. For each folder, check if it matches the source folder regex "Photos from YYYY".
-
+Remove duplicates from a Google Photos takeout.
+Replace album file photo copies with a metadata yaml file referencing the original files.
 """
 
 from collections import defaultdict, namedtuple
@@ -35,8 +23,6 @@ untitled_folder_regex = re.compile(r"^Untitled(?:\(\d+\))?$")
 
 album_folder_name = "ALBUMS"
 special_folders = ["Bin", "Archive", "Failed Videos", album_folder_name]
-# move all images that are not in the source folder to a special folder
-other_photo_folder_name = "OTHER_PHOTOS"
 metadata_file_name = "metadata.json"
 
 
